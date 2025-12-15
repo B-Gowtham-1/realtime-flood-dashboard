@@ -5,75 +5,83 @@ import time
 from datetime import datetime
 import plotly.express as px
 
-# ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="Realtime Flood Alert Dashboard",
-    layout="wide"
-)
+st.set_page_config(page_title="Realtime Flood Intelligence Dashboard", layout="wide")
 
+# ---------------- APIs ----------------
 USGS_URL = "https://waterservices.usgs.gov/nwis/iv/?format=json&sites=01646500&parameterCd=00065"
+NOAA_ALERTS = "https://api.weather.gov/alerts/active"
+METEO_URL = "https://api.open-meteo.com/v1/forecast?latitude=38.9&longitude=-77.0&hourly=precipitation,temperature_2m"
 
-# ---------------- DATA FETCH ----------------
+# ---------------- DATA FUNCTIONS ----------------
 @st.cache_data(ttl=60)
-def fetch_river_data():
-    start_time = time.time()
-
+def fetch_river():
+    t0 = time.time()
     r = requests.get(USGS_URL)
     data = r.json()
     ts = data["value"]["timeSeries"][0]["values"][0]["value"]
-
     df = pd.DataFrame(ts)
     df["value"] = df["value"].astype(float)
     df["dateTime"] = pd.to_datetime(df["dateTime"])
-
-    latency = time.time() - start_time
+    latency = time.time() - t0
     return df.tail(50), latency
 
+@st.cache_data(ttl=300)
+def fetch_weather():
+    r = requests.get(METEO_URL)
+    data = r.json()
+    rain = data["hourly"]["precipitation"][0]
+    temp = data["hourly"]["temperature_2m"][0]
+    return rain, temp
+
+@st.cache_data(ttl=300)
+def fetch_alerts():
+    r = requests.get(NOAA_ALERTS)
+    data = r.json()
+    if len(data["features"]) > 0:
+        alert = data["features"][0]["properties"]
+        return alert["event"], alert["severity"]
+    return "No Active Alerts", "None"
+
 # ---------------- UI ----------------
-st.title("🌊 Realtime Flood Monitoring & Prediction System")
-st.caption("Low-latency fog-cloud based realtime disaster alert streaming")
+st.title("🌊 Realtime Flood Intelligence & Alert System")
+st.caption("Low-latency fog–cloud framework with realtime prediction & monitoring")
 
-# User-defined threshold
-threshold = st.slider(
-    "Flood Alert Threshold (River Level in feet)",
-    min_value=5.0,
-    max_value=15.0,
-    value=7.0,
-    step=0.5
-)
+threshold = st.slider("Flood Threshold (ft)", 5.0, 15.0, 7.0, 0.5)
 
-placeholder = st.empty()
+container = st.empty()
 
 while True:
-    with placeholder.container():
-        # Measure total latency
-        total_start = time.time()
+    with container.container():
+        start_total = time.time()
 
-        df, api_latency = fetch_river_data()
-        current_level = df["value"].iloc[-1]
+        df, api_latency = fetch_river()
+        rain, temp = fetch_weather()
+        alert, severity = fetch_alerts()
 
-        # Simple prediction (next-step trend)
-        predicted_level = df["value"].tail(5).mean()
+        current = df["value"].iloc[-1]
+        predicted = df["value"].tail(5).mean()
+        total_latency = time.time() - start_total
 
-        total_latency = time.time() - total_start
+        # -------- METRICS --------
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("River Level (ft)", round(current, 2))
+        c2.metric("Predicted Level (ft)", round(predicted, 2))
+        c3.metric("Rainfall (mm)", rain)
+        c4.metric("Temperature (°C)", temp)
 
-        # ----------- METRICS ROW -----------
-        col1, col2, col3, col4 = st.columns(4)
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Prediction Status", "High Risk" if predicted > threshold else "Normal")
+        c6.metric("API Latency (s)", round(api_latency, 3))
+        c7.metric("System Latency (s)", round(total_latency, 3))
+        c8.metric("NOAA Alert", alert)
 
-        col1.metric("Current River Level (ft)", round(current_level, 2))
-        col2.metric("Predicted Level (ft)", round(predicted_level, 2))
-        col3.metric("API Latency (sec)", round(api_latency, 3))
-        col4.metric("Total System Latency (sec)", round(total_latency, 3))
-
-        # ----------- STATUS -----------
-        if predicted_level > threshold:
-            st.error("🚨 FLOOD RISK PREDICTED – PROACTIVE ALERT")
-            status = "High Risk"
+        # -------- STATUS --------
+        if predicted > threshold:
+            st.error(f"🚨 FLOOD RISK PREDICTED | Severity: {severity}")
         else:
-            st.success("✅ NORMAL – No Immediate Flood Risk")
-            status = "Normal"
+            st.success("✅ No Immediate Flood Risk")
 
-        # ----------- GRAPH -----------
+        # -------- GRAPH --------
         fig = px.line(
             df,
             x="dateTime",
@@ -81,18 +89,10 @@ while True:
             markers=True,
             title="Realtime River Level Trend"
         )
-
-        fig.add_hline(
-            y=threshold,
-            line_dash="dash",
-            line_color="red",
-            annotation_text="Alert Threshold"
-        )
-
+        fig.add_hline(y=threshold, line_dash="dash", line_color="red")
         st.plotly_chart(fig, use_container_width=True)
 
-        # ----------- FOOTER INFO -----------
-        st.write("**Prediction Status:**", status)
         st.write("**Last Updated:**", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        st.write("**Data Sources:** USGS | NOAA | Open-Meteo")
 
     time.sleep(30)
